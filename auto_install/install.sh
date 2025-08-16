@@ -723,7 +723,19 @@ preconfigurePackages() {
     USING_UFW=0
   fi
 
-  if [[ "${PKG_MANAGER}" == 'apt-get' ]] && [[ "${USING_UFW}" -eq 0 ]]; then
+  # if firewalld is enabled, configure that.
+  # running as root because sometimes the executable is not in the user's $PATH
+  if ${SUDO} bash -c 'command -v firewall-cmd' > /dev/null; then
+    if ${SUDO} firewall-cmd --state 2>/dev/null | grep -q running; then
+      USING_FIREWALLD=1
+    else
+      USING_FIREWALLD=0
+    fi
+  else
+    USING_FIREWALLD=0
+  fi
+
+  if [[ "${PKG_MANAGER}" == 'apt-get' ]] && [[ "${USING_UFW}" -eq 0 ]] && [[ "${USING_FIREWALLD}" -eq 0 ]]; then
     BASE_DEPS+=(iptables-persistent)
     echo iptables-persistent iptables-persistent/autosave_v4 boolean true \
       | ${SUDO} debconf-set-selections
@@ -766,6 +778,7 @@ preconfigurePackages() {
   fi
 
   echo "USING_UFW=${USING_UFW}" >> "${tempsetupVarsFile}"
+  echo "USING_FIREWALLD=${USING_FIREWALLD}" >> "${tempsetupVarsFile}"
 }
 
 installDependentPackages() {
@@ -2397,6 +2410,9 @@ setupPiholeDNS() {
     ${SUDO} ufw insert 1 allow in \
       on "${pivpnDEV}" to any port 53 \
       from "${pivpnNET}/${subnetClass}" > /dev/null
+  elif [[ "${USING_FIREWALLD}" -eq 1 ]]; then
+    ${SUDO} firewall-cmd --permanent --add-rich-rule="rule family=ipv4 source address=${pivpnNET}/${subnetClass} port protocol=udp port=53 accept" > /dev/null
+    ${SUDO} firewall-cmd --reload > /dev/null
   else
     ${SUDO} iptables -I INPUT -i "${pivpnDEV}" \
       -p udp --dport 53 -j ACCEPT -m comment --comment "pihole-DNS-rule"
@@ -3431,6 +3447,30 @@ confNetwork() {
 
     ${SUDO} ufw reload > /dev/null
     echo "::: UFW configuration completed."
+    return
+  elif [[ "${USING_FIREWALLD}" -eq 1 ]]; then
+    echo "::: Detected firewalld is enabled."
+    echo "::: Adding firewalld rules..."
+
+    # Allow VPN port
+    ${SUDO} firewall-cmd --permanent --add-port="${pivpnPORT}/${pivpnPROTO}" > /dev/null
+
+    # Enable masquerading for the VPN subnet
+    ${SUDO} firewall-cmd --permanent --add-masquerade > /dev/null
+
+    # Allow traffic from VPN interface
+    ${SUDO} firewall-cmd --permanent --add-interface="${pivpnDEV}" --zone=trusted > /dev/null 2>&1 || true
+
+    # Add rich rules for VPN traffic forwarding
+    ${SUDO} firewall-cmd --permanent --add-rich-rule="rule family=ipv4 source address=${pivpnNET}/${subnetClass} masquerade" > /dev/null
+
+    if [[ "${pivpnenableipv6}" -eq 1 ]]; then
+      ${SUDO} firewall-cmd --permanent --add-rich-rule="rule family=ipv6 source address=${pivpnNETv6}/${subnetClassv6} masquerade" > /dev/null
+    fi
+
+    # Reload firewalld to apply changes
+    ${SUDO} firewall-cmd --reload > /dev/null
+    echo "::: firewalld configuration completed."
     return
   fi
 

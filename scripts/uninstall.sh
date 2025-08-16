@@ -103,7 +103,20 @@ removeAll() {
       --comment "${VPN}-nat-rule"
 
     ufw reload &> /dev/null
-  elif [[ "${USING_UFW}" -eq 0 ]]; then
+  elif [[ "${USING_FIREWALLD}" -eq 1 ]]; then
+    # Remove firewalld rules
+    firewall-cmd --permanent --remove-port="${pivpnPORT}/${pivpnPROTO}" > /dev/null 2>&1 || true
+    firewall-cmd --permanent --remove-masquerade > /dev/null 2>&1 || true
+    firewall-cmd --permanent --remove-interface="${pivpnDEV}" --zone=trusted > /dev/null 2>&1 || true
+    firewall-cmd --permanent --remove-rich-rule="rule family=ipv4 source address=${pivpnNET}/${subnetClass} masquerade" > /dev/null 2>&1 || true
+    firewall-cmd --permanent --remove-rich-rule="rule family=ipv4 source address=${pivpnNET}/${subnetClass} port protocol=udp port=53 accept" > /dev/null 2>&1 || true
+    
+    if [[ "${pivpnenableipv6}" -eq 1 ]]; then
+      firewall-cmd --permanent --remove-rich-rule="rule family=ipv6 source address=${pivpnNETv6}/${subnetClassv6} masquerade" > /dev/null 2>&1 || true
+    fi
+    
+    firewall-cmd --reload > /dev/null
+  elif [[ "${USING_UFW}" -eq 0 ]] && [[ "${USING_FIREWALLD}" -eq 0 ]]; then
     if [[ "${INPUT_CHAIN_EDITED}" -eq 1 ]]; then
       iptables \
         -D INPUT \
